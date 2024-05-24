@@ -343,29 +343,86 @@ defined in `org-mind-map-node-formats'."
 	    (if colspan (concat " colspan=\"" (int-to-string colspan) "\""))
 	    (if color (concat " bgcolor=\"" color "\"")) ">" tag "</td>")))
 
+(defun org-mind-map-extract-title (title)
+  "Extracts the title from roam link if present."
+  (if (string-match "\\[\\[id:[^\\[]+\\]\\[\\([^\\[]+\\)\\]\\]" title)
+      (match-string 1 title)
+    title))
+
 (defun org-mind-map-write-tags-default (title tags color hm el &optional content images)
   "Default function for writing nodes.
 Label node with TITLE and background COLOR, and write TAGS (a list of tag names)
 into boxes underneath, using associated colors in hashmap HM.
 The EL argument is not used, but is needed for compatibility."
-  (concat "[label=<<table>"
-	  (if (> (length tags) 0)
-	      (concat "<tr><td colspan=\"" (int-to-string (length tags)) "\" ")
-	    "<tr><td")
-	  (if color (concat " bgcolor=\"" color "\" "))
-	  ">" title "</td></tr>"
-	  (if (> (length tags) 0)
-	      (concat
-	       "<tr>" (mapconcat (-partial 'org-mind-map-add-color hm) tags "") "</tr>"))
-	  (if (> (length content) 0)
-	      (concat
-	       "<tr><td BALIGN=\"LEFT\" ALIGN=\"LEFT\">" content "</td></tr>")
-	    )
+  (let ((extracted-title (org-mind-map-extract-title title)))
+    (concat "[label=<<table>"
+            (if (> (length tags) 0)
+                (concat "<tr><td colspan=\"" (int-to-string (length tags)) "\" ")
+              "<tr><td")
+            (if color (concat " bgcolor=\"" color "\" "))
+            ">" extracted-title "</td></tr>"
+            (if (> (length tags) 0)
+                (concat
+                 "<tr>" (mapconcat (-partial 'org-mind-map-add-color hm) tags "") "</tr>"))
+            (if (> (length content) 0)
+                (concat
+                 "<tr><td BALIGN=\"LEFT\" ALIGN=\"LEFT\">" content "</td></tr>"))
+            (if (> (length images) 0)
+                images "")
+            "</table>>];")))
 
-	  (if (> (length images) 0)
-	      images ""
-	    )
-	  "</table>>];"))
+(defun org-mind-map-write-tags (hm el &optional edgep)
+  "Use HM as the hash-map of colors and takes an element EL and extracts the title and tags.  
+Then, formats the titles and tags so as to be usable within DOT's graphviz language."
+  (let* ((ts (org-element-property :title el))
+         (wrapped-title (org-mind-map-wrap-lines (if (listp ts) (first ts) ts)))
+         (title (replace-regexp-in-string "&" "&amp;" wrapped-title nil t))
+         (color (org-element-property :OMM-COLOR el))
+         (tags (org-element-property :tags el))
+         (fmt (org-mind-map-get-property (if edgep :OMM-EDGE-FMT :OMM-NODE-FMT) el))
+         (b (org-mind-map-extract-title title))
+         (e (org-element-property :end el))
+         (images
+          (if org-mind-map-include-images
+              (save-restriction
+                (narrow-to-region b e)
+                (org-mind-map-narrow-to-heading-content b)
+                (mapconcat 'identity
+                           (org-element-map (org-element-parse-buffer 'object 'true)
+                               '(link)
+                             (lambda (x)
+                               (message "Inline image: %s" (org-export-inline-image-p x))
+                               (if (org-export-inline-image-p x)
+                                   (concat 
+                                    "<tr><td fixedsize='TRUE' height='100' width='100'>" "<IMG src='"
+                                    (org-element-property :path x)
+                                    "'/>"
+                                    "</td></tr>")
+                                 "")))
+                           ""))))
+         (content
+          (if org-mind-map-include-text
+              (save-restriction
+                (narrow-to-region b e)
+                (org-mind-map-narrow-to-heading-content b)
+                (mapconcat 'identity
+                           (org-element-map (org-element-parse-buffer 'object 'true)
+                               '(paragraph)
+                             (lambda (x)
+                               (org-mind-map-wrap-text
+                                (string-trim
+                                 (substring-no-properties
+                                  (car (org-element-contents x)))))))
+                           "<br></br><br></br>"))
+            nil))
+         )
+    (if edgep (funcall (or (cdr (assoc fmt org-mind-map-edge-formats))
+                           (lambda (a b) org-mind-map-edge-format-default))
+                       hm el)
+      (funcall (or (cdr (assoc fmt org-mind-map-node-formats))
+                   'org-mind-map-write-tags-default)
+               title tags color hm el content images))))
+
 
 (defun org-mind-map-get-property (prop el &optional inheritp)
   "Get property PROP from an org element EL, using inheritance if INHERITP is non-nil.
